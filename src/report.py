@@ -58,28 +58,33 @@ FINGERPRINT_CONFIG = {
     "Structure": {
         "col": "narrative_quality.structural_integrity",
         "opts": ["Coherent_Narrative", "Loose_Vlog_Style", "Compilation_Clips", "Incoherent_Chaos"],
-        "colors": {"Coherent_Narrative": "green", "Loose_Vlog_Style": "orange", "Compilation_Clips": "orange", "Incoherent_Chaos": "red"}
+        "colors": {"Coherent_Narrative": "green", "Loose_Vlog_Style": "orange", "Compilation_Clips": "orange", "Incoherent_Chaos": "red"},
+        "scores": {"Coherent_Narrative": 9.0, "Loose_Vlog_Style": 6.0, "Compilation_Clips": 4.0, "Incoherent_Chaos": 1.0}
     },
     "Intent": {
         "col": "narrative_quality.creative_intent",
         "opts": ["Artistic/Creative", "Informational", "Parasocial/Vlog", "Algorithmic/Slop"],
-        "colors": {"Artistic/Creative": "green", "Informational": "green", "Parasocial/Vlog": "orange", "Algorithmic/Slop": "red"}
+        "colors": {"Artistic/Creative": "green", "Informational": "green", "Parasocial/Vlog": "orange", "Algorithmic/Slop": "red"},
+        "scores": {"Artistic/Creative": 9.0, "Informational": 7.0, "Parasocial/Vlog": 5.0, "Algorithmic/Slop": 1.0}
     },
     "Weirdness": {
         "col": "narrative_quality.weirdness_verdict",
         "opts": ["Normal", "Creative_Surrealism", "Lazy_Randomness", "Disturbing_Uncanny"],
-        "colors": {"Normal": "green", "Creative_Surrealism": "green", "Lazy_Randomness": "red", "Disturbing_Uncanny": "red"}
+        "colors": {"Normal": "green", "Creative_Surrealism": "green", "Lazy_Randomness": "red", "Disturbing_Uncanny": "red"},
+        "scores": {"Normal": 6.0, "Creative_Surrealism": 8.0, "Lazy_Randomness": 2.0, "Disturbing_Uncanny": 1.0} 
     },
     "Density": {
         "col": "cognitive_nutrition.intellectual_density",
         # NOTE: DB values might be 'High (..)', we split on space
         "opts": ["High", "Medium", "Low", "Void"],
-        "colors": {"High": "green", "Medium": "green", "Low": "orange", "Void": "red"}
+        "colors": {"High": "green", "Medium": "green", "Low": "orange", "Void": "red"},
+        "scores": {"High": 10.0, "Medium": 7.0, "Low": 3.0, "Void": 0.0}
     },
     "Volatility": {
         "col": "cognitive_nutrition.emotional_volatility",
         "opts": ["Calm", "Upbeat", "High_Stress", "Aggressive_Screaming"],
-        "colors": {"Calm": "green", "Upbeat": "green", "High_Stress": "orange", "Aggressive_Screaming": "red"}
+        "colors": {"Calm": "green", "Upbeat": "green", "High_Stress": "orange", "Aggressive_Screaming": "red"},
+        "scores": {"Calm": 8.0, "Upbeat": 7.0, "High_Stress": 3.0, "Aggressive_Screaming": 0.0}
     }
 }
 
@@ -108,6 +113,25 @@ def render_mini_fingerprint(row):
             f"font-size: 0.75rem; font-weight: 600; border: 1px solid {fg};"
         )
         html += f"<div style='{badge_style}'>{label}: {display_val}</div>"
+        
+    # QUALITY SCORE BADGE
+    q_score = row.get('Quality Score', 0.0)
+    # Color based on score
+    if q_score >= 7.0:
+        q_color = "green"
+    elif q_score >= 4.0:
+        q_color = "orange"
+    else:
+        q_color = "red"
+        
+    q_bg = bg_map.get(q_color)
+    q_fg = text_map.get(q_color)
+    q_style = (
+         f"background-color: {q_bg}; color: {q_fg}; "
+        f"padding: 2px 8px; border-radius: 4px; "
+        f"font-size: 0.75rem; font-weight: bold; border: 2px solid {q_fg}; margin-left: auto;"
+    )
+    html += f"<div style='{q_style}'>Quality Score: {q_score:.1f}/10</div>"
     
     html += "</div>"
     return html
@@ -134,27 +158,31 @@ df = ensure_col(df, 'content_taxonomy.specific_topic', 'Unknown')
 df = ensure_col(df, 'content_taxonomy.target_demographic', 'Unknown')
 
 # Synthesize Quality Score (0-10) based on Narrative & Intent
-# Map Structure
-struct_map = {
-    "Coherent_Narrative": 9.0,
-    "Loose_Vlog_Style": 6.0,
-    "Compilation_Clips": 4.0,
-    "Incoherent_Chaos": 1.0
-}
-# Map Intent
-intent_map = {
-    "Artistic/Creative": 9.0,
-    "Informational": 7.0,
-    "Parasocial/Vlog": 5.0,
-    "Algorithmic/Slop": 1.0
-}
+# Synthesize Quality Score (0-10) based on ALL Dimensions
+df['total_score'] = 0.0
+df['score_components'] = 0
 
-df['q_struct'] = df['narrative_quality.structural_integrity'].map(struct_map).fillna(5)
-df['q_intent'] = df['narrative_quality.creative_intent'].map(intent_map).fillna(5)
-df['Quality Score'] = (df['q_struct'] + df['q_intent']) / 2.0
+for label, cfg in FINGERPRINT_CONFIG.items():
+    col = cfg['col']
+    scores_map = cfg.get('scores', {})
+    
+    # helper for density split
+    def get_score_val(x):
+        if label == "Density" and isinstance(x, str):
+            x = x.split(" ")[0]
+        return scores_map.get(x, 5.0) # Default to mid-point 5.0 if unknown
+    
+    if col in df.columns:
+        df['total_score'] += df[col].apply(get_score_val)
+        df['score_components'] += 1
 
-# Normalize for plotting (ensure it exists)
+# Average
+df['Quality Score'] = df['total_score'] / df['score_components'].replace(0, 1)
+
+# Normalize for plotting
 df = ensure_col(df, 'Quality Score', 0.0)
+
+
 
 # Rename for easier plotting
 df['Is Slop'] = df['cognitive_nutrition.is_slop']
@@ -287,6 +315,56 @@ if selected_tab == nav_options[0]:
     
     # Dimension 2: Taxonomy (Genre/Topic)
     r1c1, r1c2 = st.columns(2)
+
+    # --- SHARED DATA PREP FOR DIET TAB ---
+    if 'watch_timestamp' in df.columns:
+        ts_df = df.copy()
+        ts_df['Date'] = ts_df['watch_timestamp'].dt.date
+    else:
+        ts_df = pd.DataFrame()
+
+    def plot_time_series(dataframe, col_name, title, color_map_dict=None, custom_order=None):
+        if dataframe.empty or col_name not in dataframe.columns:
+            return None
+        
+        # Aggregate: Count by Date + Category
+        agg = dataframe.groupby(['Date', col_name]).size().reset_index(name='Count')
+        
+        # CLEANUP: Prettify Labels
+        # 1. Clean values (replace '_' with ' ')
+        clean_col = "Category" # Generic name for the legend title, or we can use 'title'
+        agg[clean_col] = agg[col_name].astype(str).str.replace('_', ' ')
+        
+        # 2. Update Color Map to match cleaned labels
+        clean_color_map = {}
+        if color_map_dict:
+            for k, v in color_map_dict.items():
+                clean_k = str(k).replace('_', ' ')
+                clean_color_map[clean_k] = v
+        
+        # 3. Handle Custom Order (also clean the order labels)
+        plot_orders = {}
+        if custom_order:
+            # Clean the custom order strings too to match the data
+            clean_order = [str(x).replace('_', ' ') for x in custom_order]
+            plot_orders = {clean_col: clean_order}
+                
+        # Create Plot
+        fig = px.bar(
+            agg, 
+            x='Date', 
+            y='Count', 
+            color=clean_col, # Use cleaned column
+            title=title,
+            color_discrete_map=clean_color_map, # Use list of mapped colors
+            template="plotly_dark",
+            labels={clean_col: title}, # Rename Legend Title to match Chart Title
+            category_orders=plot_orders 
+        )
+        # Remove gap between bars to look like a stream/density
+        fig.update_layout(bargap=0.1) 
+        return fig
+
     with r1c1:
         st.subheader("📚 Taxonomy")
         if not df.empty:
@@ -355,53 +433,12 @@ if selected_tab == nav_options[0]:
     st.subheader("📈 Evolutionary Trends (Time Series)")
     st.caption("How your content consumption is changing over time.")
 
-    if 'watch_timestamp' in df.columns:
-        # Prepare Time Series Data
-        ts_df = df.copy()
-        ts_df['Date'] = ts_df['watch_timestamp'].dt.date
-        
-        # Helper for Stacked Bar
-        def plot_time_series(dataframe, col_name, title, color_map_dict=None, custom_order=None):
-            if col_name not in dataframe.columns:
-                return None
-            
-            # Aggregate: Count by Date + Category
-            agg = dataframe.groupby(['Date', col_name]).size().reset_index(name='Count')
-            
-            # CLEANUP: Prettify Labels
-            # 1. Clean values (replace '_' with ' ')
-            clean_col = "Category" # Generic name for the legend title, or we can use 'title'
-            agg[clean_col] = agg[col_name].astype(str).str.replace('_', ' ')
-            
-            # 2. Update Color Map to match cleaned labels
-            clean_color_map = {}
-            if color_map_dict:
-                for k, v in color_map_dict.items():
-                    clean_k = str(k).replace('_', ' ')
-                    clean_color_map[clean_k] = v
-           
-            # 3. Handle Custom Order (also clean the order labels)
-            plot_orders = {}
-            if custom_order:
-                # Clean the custom order strings too to match the data
-                clean_order = [str(x).replace('_', ' ') for x in custom_order]
-                plot_orders = {clean_col: clean_order}
-                    
-            # Create Plot
-            fig = px.bar(
-                agg, 
-                x='Date', 
-                y='Count', 
-                color=clean_col, # Use cleaned column
-                title=title,
-                color_discrete_map=clean_color_map, # Use list of mapped colors
-                template="plotly_dark",
-                labels={clean_col: title}, # Rename Legend Title to match Chart Title
-                category_orders=plot_orders 
-            )
-            # Remove gap between bars to look like a stream/density
-            fig.update_layout(bargap=0.1) 
-            return fig
+    # --- TIME SERIES ANALYSIS ---
+    st.subheader("📈 Evolutionary Trends (Time Series)")
+    st.caption("How your content consumption is changing over time.")
+
+    if not ts_df.empty:
+
 
         # Define Color Maps (Matching Deep Dive)
         # 1. Structure
@@ -540,6 +577,67 @@ if selected_tab == nav_options[0]:
 
     with r2c2:
         st.empty()
+        
+    st.divider()
+    
+    # --- QUALITY SCORE EVOLUTION ---
+    st.subheader("🌟 Quality Score Evolution")
+    
+    if not ts_df.empty and 'Quality Score' in ts_df.columns:
+        # Bin Quality Score to Integer Buckets
+        def bin_quality(score):
+            try:
+                return str(int(score))
+            except:
+                return "0"
+            
+        ts_df['quality_category'] = ts_df['Quality Score'].apply(bin_quality)
+        
+        # Color Map for 0-10 (Gradient)
+        qs_colors = {
+            "0": "#8B0000", # Dark Red
+            "1": "#FF0000", # Red
+            "2": "#FF4500", # Orange Red
+            "3": "#FF8C00", # Dark Orange
+            "4": "#FFA500", # Orange
+            "5": "#FFD700", # Gold
+            "6": "#FFFF00", # Yellow
+            "7": "#ADFF2F", # Green Yellow
+            "8": "#32CD32", # Lime Green
+            "9": "#008000", # Green
+            "10": "#006400" # Dark Green
+        }
+        
+        # Numeric order 0-10 (ensure explicit string type)
+        qs_order = [str(i) for i in range(11)]
+        
+        c1, c2 = st.columns(2)
+
+        with c1:
+             st.plotly_chart(
+                plot_time_series(ts_df, 'quality_category', "Quality Score (0-10)", qs_colors, custom_order=qs_order), 
+                use_container_width=True
+            )
+            
+        with c2:
+            if 'verdict.action' in ts_df.columns:
+                 # Clean verdict action if needed
+                 ts_df['verdict_clean'] = ts_df['verdict.action'].fillna("Unknown")
+                 
+                 verdict_colors = {
+                     "Approve": "green",
+                     "Monitor": "orange",
+                     "Block_Video": "red",
+                     "Block_Channel": "darkred",
+                     "Unknown": "grey"
+                 }
+                 
+                 st.plotly_chart(
+                    plot_time_series(ts_df, 'verdict_clean', "Verdict Evolution", verdict_colors),
+                    use_container_width=True
+                 )
+
+
 
 elif selected_tab == nav_options[1]:
     st.markdown("### 🛑 The Audit (Action Items)")
@@ -552,14 +650,22 @@ elif selected_tab == nav_options[1]:
         if not risky_videos.empty:
             kill_list = risky_videos.groupby(['channel_name']).agg({
                 'video_id': 'count', 
-                'safety_score': 'mean'
+                'safety_score': 'mean',
+                'Quality Score': 'mean'
             }).reset_index()
-            kill_list.columns = ['Channel', 'Violations', 'Avg Safety']
+            kill_list.columns = ['Channel', 'Violations', 'Avg Safety', 'Avg Quality']
             kill_list = kill_list.sort_values('Avg Safety', ascending=True)
             
             # Interactive Table
+            # Gradient on Safety (Red=Low) AND Quality (Green=High)
+            # We can chain formatters
+            st_df = kill_list.style\
+                .background_gradient(cmap='RdYlGn', subset=['Avg Safety'])\
+                .background_gradient(cmap='RdYlGn', subset=['Avg Quality'])\
+                .format({'Avg Safety': "{:.1f}", 'Avg Quality': "{:.1f}"})
+
             selection = st.dataframe(
-                kill_list.style.background_gradient(cmap='RdYlGn', subset=['Avg Safety']), 
+                st_df, 
                 use_container_width=True,
                 on_select="rerun",
                 selection_mode="single-row"
@@ -575,7 +681,7 @@ elif selected_tab == nav_options[1]:
                 
                 for _, vid in channel_bad_vids.head(5).iterrows():
                      with st.expander(f"🚫 {vid['title'][:50]}...", expanded=True):
-                         st.error(f"**Safety Score:** {vid['safety_score']} | **Reason:** {vid.get('verdict.reason', 'N/A')}")
+                         st.error(f"**Safety:** {vid['safety_score']} | **Quality:** {vid['Quality Score']:.1f} | **Reason:** {vid.get('verdict.reason', 'N/A')}")
                          st.markdown(render_mini_fingerprint(vid), unsafe_allow_html=True)
                          st.video(vid['video_url'])
             else:
@@ -672,7 +778,21 @@ elif selected_tab == nav_options[2]:
         filtered_df = df[mask]
         
     if not filtered_df.empty:
-        vid_options = (filtered_df['video_id'] + " | " + filtered_df['channel_name'].fillna('Unknown') + " | " + filtered_df['title']).tolist()
+        # Enhanced Display Format: Emoji + [Score] Title | Channel
+        filtered_df['display_channel'] = filtered_df['channel_name'].fillna('Unknown')
+        
+        def format_option(x):
+            action = x.get('verdict.action', 'Unknown')
+            q = x.get('Quality Score', 0.0)
+            
+            if action == 'Approve': icon = "🟢"
+            elif action == 'Monitor': icon = "🟡"
+            elif action and 'Block' in action: icon = "🔴"
+            else: icon = "⚪"
+            
+            return f"{icon} [{q:.1f}] {x['title']} | {x['display_channel']}"
+            
+        vid_options = filtered_df.apply(format_option, axis=1).tolist()
         
         if 'deep_dive_video_idx' not in st.session_state:
             st.session_state.deep_dive_video_idx = 0
@@ -686,7 +806,8 @@ elif selected_tab == nav_options[2]:
                 key="deep_dive_video_idx"
             )
         
-        selected_vid_id = vid_options[selected_idx].split(" | ")[0]
+        # Retrieve ID directly from dataframe (safer than string parsing)
+        selected_vid_id = filtered_df.iloc[selected_idx]['video_id']
         row = df[df['video_id'] == selected_vid_id].iloc[0]
 
         
@@ -787,6 +908,34 @@ elif selected_tab == nav_options[2]:
             vol_opts = ["Calm", "Upbeat", "High_Stress", "Aggressive_Screaming"]
             vol_colors = {"Calm": "green", "Upbeat": "green", "High_Stress": "orange", "Aggressive_Screaming": "red"}
             full_html += get_scale_html("Emotional Volatility", row.get('cognitive_nutrition.emotional_volatility', 'Unknown'), vol_opts, vol_colors)
+            
+            # 6. Quality Score
+            val_qs = row.get('Quality Score', 0.0)
+            if val_qs >= 7.0:
+                 qs_color = "green"
+                 qs_msg = "Nutritious"
+            elif val_qs >= 4.0:
+                 qs_color = "orange"
+                 qs_msg = "Acceptable"
+            else:
+                 qs_color = "red"
+                 qs_msg = "Toxic Slop"
+                 
+            # Custom big display for Score
+            qs_bg = {"green": "#d4edda", "orange": "#fff3cd", "red": "#f8d7da"}.get(qs_color)
+            qs_fg = {"green": "#155724", "orange": "#856404", "red": "#721c24"}.get(qs_color)
+            
+            qs_html = (
+                f"<div style='background-color: {qs_bg}; color: {qs_fg}; border: 2px solid {qs_fg}; "
+                f"padding: 10px; border-radius: 8px; text-align: center; margin-bottom: 20px;'>"
+                f"<div style='font-size: 14px; font-weight: bold;'>OVERALL QUALITY SCORE</div>"
+                f"<div style='font-size: 24px; font-weight: 900;'>{val_qs:.1f} / 10</div>"
+                f"<div style='font-size: 12px; opacity: 0.9;'>Verdict: {qs_msg}</div>"
+                f"</div>"
+            )
+            
+            # Prepend Score to the scales
+            full_html = qs_html + full_html
             
             st.markdown(full_html, unsafe_allow_html=True)
             
