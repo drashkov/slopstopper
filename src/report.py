@@ -14,6 +14,9 @@ def get_db():
 
 # Sidebar
 st.sidebar.header("🛡️ SlopStopper Control")
+
+
+
 min_date = st.sidebar.date_input("Start Date", datetime(2025, 1, 1))
 max_date = st.sidebar.date_input("End Date", datetime.now())
 safety_threshold = st.sidebar.slider("Safety Threshold", 0, 100, 60, help="Videos below this score are flagged. (100=Safe, 0=Toxic)")
@@ -185,6 +188,8 @@ nav_options = ["🧠 The Diet", "🚨 The Audit", "🔍 Deep Dive"]
 if 'nav_selection' not in st.session_state:
     st.session_state.nav_selection = nav_options[0]
 
+
+
 selected_tab = st.radio(
     "Navigation", 
     nav_options, 
@@ -215,18 +220,40 @@ if selected_tab == nav_options[0]:
     with r1c1:
         st.subheader("📚 Taxonomy (What are they eating?)")
         if not df.empty:
-            tm_df = df.groupby(['Genre', 'Topic']).agg({'video_id': 'count', 'safety_score': 'mean'}).reset_index()
-            tm_df.columns = ['Genre', 'Topic', 'Count', 'Avg Safety']
+            # Use full DF for leaf-level detail
+            tmap_df = df.copy()
+            tmap_df['Value'] = 1
+            # Ensure string types for path components
+            tmap_df['Genre'] = tmap_df['Genre'].astype(str)
+            tmap_df['Topic'] = tmap_df['Topic'].astype(str)
+            tmap_df['video_id'] = tmap_df['video_id'].astype(str)
             
+            # Create a combined label for the leaf node
+            tmap_df['LeafLabel'] = tmap_df['title'] + " (" + tmap_df['video_id'] + ")"
+
             fig_tree = px.treemap(
-                tm_df, 
-                path=[px.Constant("YouTube History"), 'Genre', 'Topic'], 
-                values='Count',
-                color='Avg Safety',
+                tmap_df, 
+                path=[px.Constant("YouTube History"), 'Genre', 'Topic', 'LeafLabel'], 
+                values='Value',
+                color='safety_score',
                 color_continuous_scale='RdYlGn',
                 range_color=[0, 100],
-                title="Genre & Topic Distribution"
+                title="Genre & Topic Distribution",
+                # Disable hover tooltips as requested
+                hover_data={
+                    'title': False,
+                    'channel_name': False,
+                    'video_id': False,
+                    'LeafLabel': False,
+                    'Genre': False,
+                    'Topic': False,
+                    'Value': False,
+                    'safety_score': False
+                }
             )
+            # Update traces to forcefully disable hover info if hover_data isn't enough
+            fig_tree.update_traces(hoverinfo='none', hovertemplate=None)
+            
             st.plotly_chart(fig_tree, use_container_width=True)
             
     with r1c2:
@@ -386,6 +413,9 @@ elif selected_tab == nav_options[2]:
         
         selected_vid_id = vid_options[selected_idx].split(" | ")[0]
         row = df[df['video_id'] == selected_vid_id].iloc[0]
+
+        
+        # ==================== LAYOUT: Video (Left), Fingerprint (Right) ====================
         
         # ==================== LAYOUT: Video (Left), Fingerprint (Right) ====================
         left_col, right_col = st.columns([1, 1.5], gap="small")
