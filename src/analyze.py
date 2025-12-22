@@ -6,7 +6,7 @@ from typing import Optional
 import time
 
 from rich.console import Console
-from rich.progress import track
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TimeRemainingColumn
 from dotenv import load_dotenv
 from sqlite_utils import Database
 from google import genai
@@ -81,10 +81,12 @@ def analyze_video(client, video_id: str, title: str, model_name: str = CURRENT_M
         logging.error(f"Gemini Analysis Failed: {e}")
         return None
 
-from rich.table import Table
-from rich.live import Live
-from rich.text import Text
-from rich.console import Group
+
+
+# ... (imports remain)
+
+import concurrent.futures
+import threading
 
 # ... (imports remain)
 
@@ -93,8 +95,13 @@ def main():
     parser.add_argument("--ids", nargs="+", help="Specific Video IDs to analyze")
     parser.add_argument("--all", action="store_true", help="Analyze all PENDING videos")
     parser.add_argument("--limit", type=int, help="Analyze the first N pending videos")
+    parser.add_argument("--workers", type=int, default=5, help="Number of concurrent workers (1-20)")
     args = parser.parse_args()
 
+    # Cap workers at 20
+    max_workers = max(1, min(args.workers, 20))
+
+    # ... (Keep existing checks/DB loading)
     if not GEMINI_API_KEY and not os.getenv("MOCK_GEMINI"):
          console.print("[bold red]Error: GEMINI_API_KEY not set.[/bold red]")
          return
@@ -111,75 +118,91 @@ def main():
         console.print("Please specify --ids, --limit, or --all")
         return
 
+    # Sharing Client? Google GenAI Client is thread-safe usually.
+    # We will instantiate inside main.
+    client = None
+    if GEMINI_API_KEY:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+
+    # Shared State & Locks
+    state = {
+        "cost": 0.0,
+        "in": 0,
+        "out": 0,
+        "processed": 0
+    }
+    lock = threading.Lock()
+
     # Helper to calculate cost
     def calc_cost(in_tok, out_tok, model):
         price = PRICE_PER_MILLION.get(model, 0.0)
         return ((in_tok + out_tok) / 1_000_000) * price
 
-    client = None
-    if GEMINI_API_KEY:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-    
-    total_cost = 0.0
-    total_in = 0
-    total_out = 0
-    videos_processed = 0
-    start_time = time.time()
-
-    # Initialize Table with width constraint and footers
-    table = Table(title="Analysis Results", width=80, border_style="cyan", show_footer=True)
-    table.add_column("Video ID", style="cyan", no_wrap=True)
-    table.add_column("Title", style="white", ratio=2)
-    table.add_column("Verdict", style="magenta")
-    table.add_column("Tokens (In/Out)", justify="right", style="green", footer="0/0")
-    table.add_column("Est. Cost", justify="right", style="yellow", footer="$0.000000")
-
-    # Simple stats text instead of spinner
-    stats_text = Text()
-
-    with Live(Group(table, stats_text), console=console, auto_refresh=False) as live:
-        for row in rows:
+    # Setup Progress Bar with Rolling Log
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=console
+    ) as progress:
+        
+        task_id = progress.add_task(f"[cyan]Initializing ({max_workers} workers)...", total=len(rows))
+        
+        # Print Header
+        progress.console.print(f"[bold white]{'Video ID':<12} | {'Title':<35} | {'Verdict':<15} | {'Tokens':<12} | {'Cost':<10}[/bold white]")
+        progress.console.print("[dim]" + "-"*95 + "[/dim]")
+        
+        def process_single_video(row):
             video_id = row['video_id']
             title = row['title']
             
-            # Analysis
+            # MOCK LOGIC
             if os.getenv("MOCK_GEMINI"):
-                # Mock logic
-                time.sleep(0.5) # Simulate latency
+                time.sleep(0.5) 
                 action = "Approve"
                 in_tok, out_tok = 100, 50
                 cost = calc_cost(in_tok, out_tok, CURRENT_MODEL)
                 
-                total_in += in_tok
-                total_out += out_tok
-                total_cost += cost
+                with lock:
+                    state["in"] += in_tok
+                    state["out"] += out_tok
+                    state["cost"] += cost
+                    state["processed"] += 1
+                    current_cost = state["cost"]
                 
-                table.add_row(
-                    video_id, 
-                    title[:20]+"..." if len(title)>20 else title, 
-                    action, 
-                    f"{in_tok}/{out_tok}", 
-                    f"${cost:.6f}"
-                )
-                
-                # Update footers
-                table.columns[3].footer = f"{total_in}/{total_out}"
-                table.columns[4].footer = f"${total_cost:.6f}"
-                
-                videos_processed += 1
-                elapsed = time.time() - start_time
-                per_video = elapsed / videos_processed if videos_processed else 0
-                remaining = len(rows) - videos_processed
-                eta = remaining * per_video
-                stats_text.plain = f"⏱ Elapsed: {elapsed:.1f}s | ✓ Processed: {videos_processed}/{len(rows)} | ⏳ Per video: {per_video:.1f}s | 🏁 ETA: {eta:.0f}s"
-                live.refresh()
-                continue
+                # UI Update (Thread safe via rich)
+                # Helper to print row
+                vid_s = video_id[:12]
+                tit_s = (title[:32] + "...") if len(title) > 35 else title
+                tit_s = tit_s.ljust(35)
+                # Colorize Verdict
+                if "Block" in action or "Error" in action: v_col = "red"
+                elif "Monitor" in action: v_col = "yellow"
+                else: v_col = "green"
+                verdict_s = f"[{v_col}]{action:<15}[/{v_col}]"
+                tok_s = f"{in_tok}/{out_tok}"
+                cost_s = f"${cost:.6f}"
+                progress.console.print(f"{vid_s:<12} | {tit_s} | {verdict_s} | {tok_s:<12} | {cost_s:<10}")
+
+                progress.update(task_id, advance=1, description=f"[cyan]Analyzing ({max_workers} threads)... Cost: ${current_cost:.4f}")
+                return
 
             if not client:
-                 continue
+                 progress.update(task_id, advance=1)
+                 return
 
-            response = analyze_video(client, video_id, title)
-            
+            # REAL API CALL
+            # Note: client usage might need catching if not thread safe, but standard clients usually are.
+            try:
+                response = analyze_video(client, video_id, title)
+            except Exception as e:
+                # Fallback error catch
+                response = None
+                logging.error(f"Generate Content Error: {e}")
+
             if response and response.text:
                 try:
                     analysis_data = VideoAnalysis.model_validate_json(response.text)
@@ -188,12 +211,15 @@ def main():
                     out_tok = response.usage_metadata.candidates_token_count if response.usage_metadata else 0
                     cost = calc_cost(in_tok, out_tok, CURRENT_MODEL)
                     
-                    total_in += in_tok
-                    total_out += out_tok
-                    total_cost += cost
+                    with lock:
+                        state["in"] += in_tok
+                        state["out"] += out_tok
+                        state["cost"] += cost
+                        current_cost = state["cost"]
 
-                    # Update DB
-                    db["videos"].update(video_id, {
+                    # Update DB (Thread-Local Connection)
+                    thread_db = Database(DB_FILE)
+                    thread_db["videos"].update(video_id, {
                         "status": "ANALYZED",
                         "analysis_json": response.text,
                         "safety_score": analysis_data.risk_assessment.safety_score,
@@ -207,35 +233,40 @@ def main():
                         "estimated_cost": cost,
                     })
                     
-                    table.add_row(
-                        video_id, 
-                        title[:20]+"..." if len(title)>20 else title, 
-                        analysis_data.verdict.action.value, 
-                        f"{in_tok}/{out_tok}", 
-                        f"${cost:.6f}"
-                    )
-                    
-                    # Update footers
-                    table.columns[3].footer = f"{total_in}/{total_out}"
-                    table.columns[4].footer = f"${total_cost:.6f}"
+                    # Print Row
+                    action = analysis_data.verdict.action.value
+                    vid_s = video_id[:12]
+                    tit_s = (title[:32] + "...") if len(title) > 35 else title
+                    tit_s = tit_s.ljust(35)
+                    if "Block" in action or "Error" in action: v_col = "red"
+                    elif "Monitor" in action: v_col = "yellow"
+                    else: v_col = "green"
+                    verdict_s = f"[{v_col}]{action:<15}[/{v_col}]"
+                    progress.console.print(f"{vid_s:<12} | {tit_s} | {verdict_s} | {in_tok}/{out_tok:<12} | ${cost:.6f}")
                     
                 except Exception as e:
                     logging.error(f"Failed to process response for {video_id}: {e}")
-                    db["videos"].update(video_id, {"status": "ERROR", "error_log": str(e)})
-                    table.add_row(video_id, title[:15], f"ERR: {str(e)[:10]}", "-", "-")
+                    thread_db = Database(DB_FILE)
+                    thread_db["videos"].update(video_id, {"status": "ERROR", "error_log": str(e)})
+                    progress.console.print(f"{video_id[:12]} | {title[:20]:<35} | [red]Error[/red]           | 0/0          | $0.000000")
             else:
-                 db["videos"].update(video_id, {"status": "ERROR", "error_log": "No response from Gemini"})
-                 table.add_row(video_id, title[:15], "ERR: No Resp", "-", "-")
+                 thread_db = Database(DB_FILE)
+                 thread_db["videos"].update(video_id, {"status": "ERROR", "error_log": "No response from Gemini"})
+                 progress.console.print(f"{video_id[:12]} | {title[:20]:<35} | [red]No Resp[/red]         | 0/0          | $0.000000")
 
-            videos_processed += 1
-            elapsed = time.time() - start_time
-            per_video = elapsed / videos_processed if videos_processed else 0
-            remaining = len(rows) - videos_processed
-            eta = remaining * per_video
-            stats_text.plain = f"⏱ Elapsed: {elapsed:.1f}s | ✓ Processed: {videos_processed}/{len(rows)} | ⏳ Per video: {per_video:.1f}s | 🏁 ETA: {eta:.0f}s"
-            live.refresh()
+            with lock:
+                state["processed"] += 1
+                current_cost = state["cost"]
+                
+            progress.update(task_id, advance=1, description=f"[cyan]Analyzing ({max_workers} threads)... Cost: ${current_cost:.4f}")
 
-    console.print(f"[bold green]Analysis Complete. Total Estimated Cost: ${total_cost:.6f}[/bold green]")
+        # Execute Concurrently
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            futures = [executor.submit(process_single_video, row) for row in rows]
+            concurrent.futures.wait(futures)
+
+    console.print(f"[bold green]Analysis Complete. Total Estimated Cost: ${state['cost']:.6f}[/bold green]")
 
 if __name__ == "__main__":
     main()

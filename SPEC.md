@@ -137,14 +137,19 @@ The analysis output is structured into 5 core dimensions:
 *   **Risk Radar:** Spider chart showing aggregate risk flags.
 *   **Quality vs Safety:** Scatter plot (Quadrants: Safe & Good, Unsafe but Art, Safe Slop, Danger Zone).
 *   **Cognitive Nutrition:** Donut chart of Emotional Volatility.
+*   **Evolutionary Trends:** Time series dashboards showing the history of consumed formats, durations, and Quality Score (0-10).
 
 #### 🚨 The Audit (Action)
-*   **The Kill List:** Channels ranked by Average Safety Score (lowest first). High-density table.
-*   **Red Flag Gallery:** Specific recent videos flagged for high-risk categories (Radicalization, etc.) with Verdict reasons.
+#### 🚨 The Audit (Action)
+*   **The Kill List:** Channels ranked by Average Safety Score. Interactive Table: Select a channel to inspect its specific violations (with Mini Fingerprint).
+*   **Risk Spotlight:** Dedicated tabs for specific toxins:
+    *   💀 **Brainrot**: High Weirdness / Low Density.
+    *   🤬 **Aggression**: High Emotional Volatility.
+    *   🧟 **Slop**: Low Creative Intent / Algorithmic.
 
 #### 🔍 Deep Dive (Inspector)
 *   **Purpose:** Detailed analysis of a single video.
-*   **Navigation:** Searchable Dropdown (Title | Channel | ID). unified session state (`deep_dive_video_idx`).
+*   **Navigation:** Searchable Dropdown with Verdict Emojis (🟢 Approve, 🟡 Monitor, 🔴 Block). unified session state (`deep_dive_video_idx`).
 *   **Layout:**
     *   **Left Column:**
         *   **Header:** `##### [Channel] | Title`
@@ -153,7 +158,8 @@ The analysis output is structured into 5 core dimensions:
         *   **Player:** YouTube Video Embed.
     *   **Right Column:**
         *   **Header:** `##### 🧬 Content Fingerprint`
-        *   **Fingerprint Scales:** Visual scale bars for Structure, Intent, Weirdness, Density, and Volatility.
+        *   **Score Card:** Prominent "Quality Score" display (0-10) with verdict (Nutritious/Acceptable/Slop).
+        *   **Fingerprint Scales:** Visual scale bars for Structure, Intent, Weirdness, Density, Volatility.
             *   Layout: Flexbox, horizontal bars.
             *   Highlight: Selected value is colored (Green/Orange/Red) and bordered.
         *   **Visual Setting & Flags:** Text description.

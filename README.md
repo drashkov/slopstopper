@@ -10,6 +10,8 @@ Unlike generic brand safety tools, SlopStopper adopts the persona of a cynical, 
 -   **5-Dimension Analysis**: Uses Gemini 2.5 Flash-Lite to evaluate content across Visual Grounding, Taxonomy, Narrative Quality, Cognitive Nutrition, and Risk.
 -   **"Cynical" Persona**: Detects "sigma male" rhetoric, "mascot horror," and dopamine-loop editing styles.
 -   **Deep Dive Inspector**: A "Content Fingerprint" view for individual video analysis, showing structural integrity, weirdness, and emotional volatility scales.
+-   **Nutritional Scoring**: A comprehensive 0-10 "Quality Score" for every video, evolving over time.
+-   **Actionable Audit**: Interactive "Kill List" and "Risk Spotlight" (Brainrot/Aggression/Slop) to isolate and block toxic channels.
 -   **High-Fidelity Dashboard**: A persistent, state-preserving Streamlit interface with "Diet" (Overview), "Audit" (Action), and "Deep Dive" (Inspection) tabs.
 
 ## Prerequisites
