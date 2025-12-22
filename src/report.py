@@ -193,8 +193,8 @@ df['Topic'] = df['content_taxonomy.specific_topic'].fillna('Generic')
 # Date Filter (if timestamp available)
 if 'watch_timestamp' in df.columns:
     df['watch_timestamp'] = pd.to_datetime(df['watch_timestamp'], errors='coerce')
-    # Filter
-    # df = df[(df['watch_timestamp'].dt.date >= min_date) & (df['watch_timestamp'].dt.date <= max_date)]
+    # Filter by selected date range
+    df = df[(df['watch_timestamp'].dt.date >= min_date) & (df['watch_timestamp'].dt.date <= max_date)]
 
 # --- GLOBAL STYLING ---
 st.markdown("""
@@ -428,10 +428,6 @@ if selected_tab == nav_options[0]:
 
     st.divider()
 
-    
-    # --- TIME SERIES ANALYSIS ---
-    st.subheader("📈 Evolutionary Trends (Time Series)")
-    st.caption("How your content consumption is changing over time.")
 
     # --- TIME SERIES ANALYSIS ---
     st.subheader("📈 Evolutionary Trends (Time Series)")
