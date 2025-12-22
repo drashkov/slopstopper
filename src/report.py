@@ -74,6 +74,29 @@ df = ensure_col(df, 'content_taxonomy.primary_genre', 'Unknown')
 df = ensure_col(df, 'content_taxonomy.specific_topic', 'Unknown')
 df = ensure_col(df, 'content_taxonomy.target_demographic', 'Unknown')
 
+# Synthesize Quality Score (0-10) based on Narrative & Intent
+# Map Structure
+struct_map = {
+    "Coherent_Narrative": 9.0,
+    "Loose_Vlog_Style": 6.0,
+    "Compilation_Clips": 4.0,
+    "Incoherent_Chaos": 1.0
+}
+# Map Intent
+intent_map = {
+    "Artistic/Creative": 9.0,
+    "Informational": 7.0,
+    "Parasocial/Vlog": 5.0,
+    "Algorithmic/Slop": 1.0
+}
+
+df['q_struct'] = df['narrative_quality.structural_integrity'].map(struct_map).fillna(5)
+df['q_intent'] = df['narrative_quality.creative_intent'].map(intent_map).fillna(5)
+df['Quality Score'] = (df['q_struct'] + df['q_intent']) / 2.0
+
+# Normalize for plotting (ensure it exists)
+df = ensure_col(df, 'Quality Score', 0.0)
+
 # Rename for easier plotting
 df['Is Slop'] = df['cognitive_nutrition.is_slop']
 df['Is Brainrot'] = df['cognitive_nutrition.is_brainrot']
@@ -201,24 +224,12 @@ selected_tab = st.radio(
 # Removed st.divider() for density
 
 if selected_tab == nav_options[0]:
-    st.markdown("### 🥗 Cognitive Nutrition & Diet")
+    # Use full width for the taxonomy immediately
     
-    # KPI Row
-    slop_count = df['cognitive_nutrition.is_slop'].sum() if 'cognitive_nutrition.is_slop' in df.columns else 0
-    brainrot_count = df['cognitive_nutrition.is_brainrot'].sum() if 'cognitive_nutrition.is_brainrot' in df.columns else 0
-    avg_quality = df['Quality Score'].mean() if 'Quality Score' in df.columns else 0
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Slop Detected", int(slop_count), delta_color="inverse")
-    col2.metric("Brainrot Detected", int(brainrot_count), delta_color="inverse")
-    col3.metric("Avg Quality Score", f"{avg_quality:.1f}", help="Surrealism/Art vs Chaos")
-
-    st.divider()
-
     # Dimension 2: Taxonomy (Genre/Topic)
     r1c1, r1c2 = st.columns(2)
     with r1c1:
-        st.subheader("📚 Taxonomy (What are they eating?)")
+        st.subheader("📚 Taxonomy")
         if not df.empty:
             # Use full DF for leaf-level detail
             tmap_df = df.copy()
@@ -262,7 +273,10 @@ if selected_tab == nav_options[0]:
         if flag_cols:
             risk_counts = df[flag_cols].sum().reset_index()
             risk_counts.columns = ['Flag', 'Count']
-            risk_counts['Flag'] = risk_counts['Flag'].str.replace('risk_assessment.flags.', '')
+            # IMPROVEMENT: Format Flag names nicely (remove prefix, replace underscores, title case)
+            risk_counts['Flag'] = risk_counts['Flag'].str.replace('risk_assessment.flags.', '') \
+                                                     .str.replace('_', ' ') \
+                                                     .str.title()
             
             fig_radar = px.line_polar(
                 risk_counts, 
@@ -277,7 +291,165 @@ if selected_tab == nav_options[0]:
 
     st.divider()
 
-    # Dimension 3 & 4: Quality & Nutrition
+    
+    # --- TIME SERIES ANALYSIS ---
+    st.subheader("📈 Evolutionary Trends (Time Series)")
+    st.caption("How your content consumption is changing over time.")
+
+    if 'watch_timestamp' in df.columns:
+        # Prepare Time Series Data
+        ts_df = df.copy()
+        ts_df['Date'] = ts_df['watch_timestamp'].dt.date
+        
+        # Helper for Stacked Bar
+        def plot_time_series(dataframe, col_name, title, color_map_dict=None, custom_order=None):
+            if col_name not in dataframe.columns:
+                return None
+            
+            # Aggregate: Count by Date + Category
+            agg = dataframe.groupby(['Date', col_name]).size().reset_index(name='Count')
+            
+            # CLEANUP: Prettify Labels
+            # 1. Clean values (replace '_' with ' ')
+            clean_col = "Category" # Generic name for the legend title, or we can use 'title'
+            agg[clean_col] = agg[col_name].astype(str).str.replace('_', ' ')
+            
+            # 2. Update Color Map to match cleaned labels
+            clean_color_map = {}
+            if color_map_dict:
+                for k, v in color_map_dict.items():
+                    clean_k = str(k).replace('_', ' ')
+                    clean_color_map[clean_k] = v
+           
+            # 3. Handle Custom Order (also clean the order labels)
+            plot_orders = {}
+            if custom_order:
+                # Clean the custom order strings too to match the data
+                clean_order = [str(x).replace('_', ' ') for x in custom_order]
+                plot_orders = {clean_col: clean_order}
+                    
+            # Create Plot
+            fig = px.bar(
+                agg, 
+                x='Date', 
+                y='Count', 
+                color=clean_col, # Use cleaned column
+                title=title,
+                color_discrete_map=clean_color_map, # Use list of mapped colors
+                template="plotly_dark",
+                labels={clean_col: title}, # Rename Legend Title to match Chart Title
+                category_orders=plot_orders 
+            )
+            # Remove gap between bars to look like a stream/density
+            fig.update_layout(bargap=0.1) 
+            return fig
+
+        # Define Color Maps (Matching Deep Dive)
+        # 1. Structure
+        struct_colors = {
+            "Coherent_Narrative": "green", 
+            "Loose_Vlog_Style": "orange", 
+            "Compilation_Clips": "orange", 
+            "Incoherent_Chaos": "red"
+        }
+        # 2. Intent
+        intent_colors = {
+            "Artistic/Creative": "green", 
+            "Informational": "green", 
+            "Parasocial/Vlog": "orange", 
+            "Algorithmic/Slop": "red"
+        }
+        # 3. Weirdness
+        weird_colors = {
+            "Normal": "green", 
+            "Creative_Surrealism": "green", 
+            "Lazy_Randomness": "orange", 
+            "Disturbing_Uncanny": "red"
+        }
+        # 4. Density (Prefix matching logic needed? The DB values are consistent strings usually)
+        # The DB strings might be "High (..)" so we need to maybe clean them first or mapped exact strings.
+        # Let's clean the DF column for plotting first like we did for Deep Dive display?
+        # For now, assuming exact matches or we use the raw strings.
+        # Deep Dive logic: `short_val = db_val.split(" ")[0]`. Let's apply that.
+        ts_df['density_clean'] = ts_df['cognitive_nutrition.intellectual_density'].apply(lambda x: str(x).split(' ')[0] if pd.notnull(x) else "Unknown")
+        dens_colors = {"High": "green", "Medium": "green", "Low": "orange", "Void": "red"}
+        
+        # 5. Volatility
+        vol_colors = {
+            "Calm": "green", 
+            "Upbeat": "green", 
+            "High_Stress": "orange", 
+            "Aggressive_Screaming": "red"
+        }
+
+        # 6. Video Format (from metadata)
+        # Check column existence safely
+        col_fmt = 'video_metadata.format'
+        if col_fmt not in ts_df.columns:
+            ts_df[col_fmt] = "Unknown"
+        else:
+            ts_df[col_fmt] = ts_df[col_fmt].fillna("Unknown")
+            
+        fmt_colors = {
+            "Standard_Landscape": "blue",
+            "vertical_short": "orange", # Guessing potential value, or let plotly decide
+            "square": "purple"
+        }
+
+        # 7. Perceived Duration (from metadata)
+        col_dur = 'video_metadata.duration_perceived'
+        if col_dur not in ts_df.columns:
+             ts_df[col_dur] = "Unknown"
+        else:
+             ts_df[col_dur] = ts_df[col_dur].fillna("Unknown")
+
+        # Map typical values if we want specific colors (e.g. Short=Orange, Long=Blue)
+        # Values like "Medium (5-20 min)", "Short (< 5 min)" etc.
+        # We can leave colors dynamic or try to map. 
+        # Let's map "Short..." to orange-ish if possible, but dynamic is safer for unknown strings.
+        dur_perceived_colors = {
+            "Micro (<1 min)": "orange",
+            "Short (1-5 min)": "orange",
+            "Medium (5-20 min)": "blue",
+            "Long (20+ min)": "blue",
+            "Extra Long (> 60 min)": "purple"
+        }
+        
+        # Define logical order
+        dur_order = [
+            "Micro (<1 min)",
+            "Short (1-5 min)",
+            "Medium (5-20 min)",
+            "Long (20+ min)",
+            "Extra Long (> 60 min)"
+        ]
+
+        # Plot Rows
+        r3c1, r3c2 = st.columns(2)
+        with r3c1:
+            st.plotly_chart(plot_time_series(ts_df, 'narrative_quality.structural_integrity', "Structure", struct_colors), use_container_width=True)
+            st.plotly_chart(plot_time_series(ts_df, 'narrative_quality.weirdness_verdict', "Weirdness", weird_colors), use_container_width=True)
+            st.plotly_chart(plot_time_series(ts_df, 'cognitive_nutrition.emotional_volatility', "Emotional Volatility", vol_colors), use_container_width=True)
+            
+        with r3c2:
+            st.plotly_chart(plot_time_series(ts_df, 'narrative_quality.creative_intent', "Intent", intent_colors), use_container_width=True)
+            st.plotly_chart(plot_time_series(ts_df, 'density_clean', "Intellectual Density", dens_colors), use_container_width=True)
+            
+        # New Row: Format & Perceived Duration
+        r4c1, r4c2 = st.columns(2)
+        with r4c1:
+             st.plotly_chart(plot_time_series(ts_df, col_fmt, "Video Format", fmt_colors), use_container_width=True)
+        with r4c2:
+             st.plotly_chart(plot_time_series(ts_df, col_dur, "Perceived Duration", dur_perceived_colors, custom_order=dur_order), use_container_width=True)
+
+    else:
+        st.warning("No timestamp data available for Time Series.")
+
+
+
+    st.divider()
+
+    # Dimension 3: Quality vs Safety (Quadrants)
     r2c1, r2c2 = st.columns(2)
     with r2c1:
         st.subheader("🎨 Quality vs Safety (The Quadrants)")
@@ -308,16 +480,7 @@ if selected_tab == nav_options[0]:
             st.plotly_chart(fig_scatter, use_container_width=True)
 
     with r2c2:
-        st.subheader("🧠 Cognitive Nutrition")
-        st.caption("Emotional Volatility vs Intellectual Density")
-        
-        # We need to map Enums to numbers for plotting if they exist
-        # If not, we list counts
-        if 'cognitive_nutrition.emotional_volatility' in df.columns:
-            ev_counts = df['cognitive_nutrition.emotional_volatility'].value_counts().reset_index()
-            ev_counts.columns = ['Volatility', 'Count']
-            fig_pie = px.pie(ev_counts, values='Count', names='Volatility', title="Emotional Volatility", hole=0.4)
-            st.plotly_chart(fig_pie, use_container_width=True)
+        st.empty()
 
 elif selected_tab == nav_options[1]:
     st.markdown("### 🛑 The Audit (Action Items)")
