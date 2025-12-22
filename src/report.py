@@ -53,6 +53,65 @@ def load_data():
             
     return df
 
+# --- CONSTANTS & CONFIG ---
+FINGERPRINT_CONFIG = {
+    "Structure": {
+        "col": "narrative_quality.structural_integrity",
+        "opts": ["Coherent_Narrative", "Loose_Vlog_Style", "Compilation_Clips", "Incoherent_Chaos"],
+        "colors": {"Coherent_Narrative": "green", "Loose_Vlog_Style": "orange", "Compilation_Clips": "orange", "Incoherent_Chaos": "red"}
+    },
+    "Intent": {
+        "col": "narrative_quality.creative_intent",
+        "opts": ["Artistic/Creative", "Informational", "Parasocial/Vlog", "Algorithmic/Slop"],
+        "colors": {"Artistic/Creative": "green", "Informational": "green", "Parasocial/Vlog": "orange", "Algorithmic/Slop": "red"}
+    },
+    "Weirdness": {
+        "col": "narrative_quality.weirdness_verdict",
+        "opts": ["Normal", "Creative_Surrealism", "Lazy_Randomness", "Disturbing_Uncanny"],
+        "colors": {"Normal": "green", "Creative_Surrealism": "green", "Lazy_Randomness": "red", "Disturbing_Uncanny": "red"}
+    },
+    "Density": {
+        "col": "cognitive_nutrition.intellectual_density",
+        # NOTE: DB values might be 'High (..)', we split on space
+        "opts": ["High", "Medium", "Low", "Void"],
+        "colors": {"High": "green", "Medium": "green", "Low": "orange", "Void": "red"}
+    },
+    "Volatility": {
+        "col": "cognitive_nutrition.emotional_volatility",
+        "opts": ["Calm", "Upbeat", "High_Stress", "Aggressive_Screaming"],
+        "colors": {"Calm": "green", "Upbeat": "green", "High_Stress": "orange", "Aggressive_Screaming": "red"}
+    }
+}
+
+def render_mini_fingerprint(row):
+    """Generates a compact HTML row of badges for the validation metrics."""
+    html = "<div style='display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px;'>"
+    
+    bg_map = {"green": "#d4edda", "orange": "#fff3cd", "red": "#f8d7da", "blue": "#cce5ff", "purple": "#e2e3e5"}
+    text_map = {"green": "#155724", "orange": "#856404", "red": "#721c24", "blue": "#004085", "purple": "#383d41"}
+
+    for label, cfg in FINGERPRINT_CONFIG.items():
+        val = row.get(cfg['col'], 'Unknown')
+        # specific handling for density split
+        if label == "Density" and val and isinstance(val, str):
+            val = val.split(" ")[0]
+            
+        color_key = cfg['colors'].get(val, 'blue')
+        bg = bg_map.get(color_key, "#e2e3e5")
+        fg = text_map.get(color_key, "#383d41")
+        
+        display_val = str(val).replace('_', ' ')
+        
+        badge_style = (
+            f"background-color: {bg}; color: {fg}; "
+            f"padding: 2px 6px; border-radius: 4px; "
+            f"font-size: 0.75rem; font-weight: 600; border: 1px solid {fg};"
+        )
+        html += f"<div style='{badge_style}'>{label}: {display_val}</div>"
+    
+    html += "</div>"
+    return html
+
 df = load_data()
 
 if df.empty:
@@ -497,23 +556,76 @@ elif selected_tab == nav_options[1]:
             }).reset_index()
             kill_list.columns = ['Channel', 'Violations', 'Avg Safety']
             kill_list = kill_list.sort_values('Avg Safety', ascending=True)
-            st.dataframe(kill_list.style.background_gradient(cmap='RdYlGn', subset=['Avg Safety']), use_container_width=True)
+            
+            # Interactive Table
+            selection = st.dataframe(
+                kill_list.style.background_gradient(cmap='RdYlGn', subset=['Avg Safety']), 
+                use_container_width=True,
+                on_select="rerun",
+                selection_mode="single-row"
+            )
+            
+            # Handle Selection
+            if selection.selection.rows:
+                selected_row_idx = selection.selection.rows[0]
+                selected_channel = kill_list.iloc[selected_row_idx]['Channel']
+                
+                st.markdown(f"#### 🔍 Inspecting: **{selected_channel}**")
+                channel_bad_vids = risky_videos[risky_videos['channel_name'] == selected_channel]
+                
+                for _, vid in channel_bad_vids.head(5).iterrows():
+                     with st.expander(f"🚫 {vid['title'][:50]}...", expanded=True):
+                         st.error(f"**Safety Score:** {vid['safety_score']} | **Reason:** {vid.get('verdict.reason', 'N/A')}")
+                         st.markdown(render_mini_fingerprint(vid), unsafe_allow_html=True)
+                         st.video(vid['video_url'])
+            else:
+                st.info("👆 Select a channel to see their violations.")
+                
         else:
             st.success("No active threats found.")
             
     with col2:
-        st.subheader("🚩 Red Flag Gallery")
-        # Filter for recent red flags
-        col_radical = 'risk_assessment.flags.ideological_radicalization'
-        if col_radical in df.columns:
-            red_flags = df[df[col_radical] == True]
-            if not red_flags.empty:
-                for _, vid in red_flags.head(5).iterrows():
-                    with st.expander(f"⚠️ {vid['title'][:40]}...", expanded=True):
-                        st.write(f"**Reason:** {vid.get('verdict.reason', 'N/A')}")
-                        st.video(vid['video_url'])
+        st.subheader("🔦 Risk Spotlight")
+        
+        spot_tabs = st.tabs(["💀 Brainrot", "🤬 Aggression", "🧟 Slop"])
+        
+        def show_toxic_video(videorow):
+             with st.expander(f"⚠️ {videorow['title'][:40]}...", expanded=False):
+                st.write(f"**Reason:** {videorow.get('verdict.reason', 'N/A')}")
+                st.markdown(render_mini_fingerprint(videorow), unsafe_allow_html=True)
+                st.video(videorow['video_url'])
+        
+        with spot_tabs[0]:
+            # Brainrot: High Weirdness OR Explicit Brainrot Flag
+            br_mask = (df['cognitive_nutrition.is_brainrot'] == True) | (df['narrative_quality.weirdness_verdict'] == 'Disturbing_Uncanny')
+            br_vids = df[br_mask]
+            if not br_vids.empty:
+                for _, vid in br_vids.head(3).iterrows():
+                    show_toxic_video(vid)
             else:
-                st.info("No Radicalization flags found.")
+                st.caption("No brainrot detected.")
+
+        with spot_tabs[1]:
+            # Aggression: High Volatility
+            agg_mask = (df['cognitive_nutrition.emotional_volatility'] == 'Aggressive_Screaming')
+            agg_vids = df[agg_mask]
+            if not agg_vids.empty:
+                for _, vid in agg_vids.head(3).iterrows():
+                    show_toxic_video(vid)
+            else:
+                st.caption("No aggression detected.")
+                
+        with spot_tabs[2]:
+            # Slop: Explicit Slop Flag
+            slop_mask = (df['cognitive_nutrition.is_slop'] == True)
+            slop_vids = df[slop_mask]
+            if not slop_vids.empty:
+                for _, vid in slop_vids.head(3).iterrows():
+                    show_toxic_video(vid)
+            else:
+                st.caption("No slop detected.")
+    
+
 
 elif selected_tab == nav_options[2]:
     # Custom CSS for compact layout and bigger tabs
